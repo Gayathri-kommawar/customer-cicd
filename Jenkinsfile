@@ -76,7 +76,7 @@ pipeline {
 
                         env.APP_NAME = 'customer-app-dev'
                         env.DB_NAME = 'customer-db-dev'
-                        env.HOST_PORT = '8081'
+                        env.HOST_PORT = '8082'
                         env.NETWORK_NAME = 'customer-dev-net'
                         env.DB_VOLUME = 'customer-db-dev-data'
 
