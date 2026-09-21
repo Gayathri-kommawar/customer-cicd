@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import os
 import mysql.connector
 
@@ -74,6 +74,41 @@ def environment():
         "environment": ENVIRONMENT
     })
 
+@app.route("/customers/search")
+def search_customers():
+    query = request.args.get("q", "").strip()
 
+    if not query:
+        return jsonify({"error": "Search query is required"}), 400
+
+    try:
+        connection = mysql.connector.connect(
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME
+        )
+
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute(
+            "SELECT id, name, email FROM customers WHERE name LIKE %s",
+            (f"%{query}%",)
+        )
+
+        customers = cursor.fetchall()
+
+        cursor.close()
+        connection.close()
+
+        return jsonify({
+            "query": query,
+            "customers": customers
+        })
+
+    except Exception as e:
+        return jsonify({
+            "error": str(e)
+        }), 500
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
