@@ -2,6 +2,7 @@ pipeline {
     agent any
 
     parameters {
+
         choice(
             name: 'ENVIRONMENT',
             choices: ['DEV', 'UAT', 'PRODUCTION'],
@@ -34,9 +35,6 @@ pipeline {
     }
 
     environment {
-        DB_USER = 'customer'
-        DB_PASSWORD = 'customer123'
-        DB_ROOT_PASSWORD = 'root123'
         DB_DATABASE = 'customerdb'
 
         COMPOSE = 'C:\\Users\\gayat\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker-compose.exe'
@@ -50,12 +48,18 @@ pipeline {
 
                     if (params.ENVIRONMENT == 'PRODUCTION' &&
                         params.CONFIRM_PRODUCTION != 'YES') {
+
                         error('Production deployment requires CONFIRM_PRODUCTION=YES')
                     }
 
                     if (params.ACTION == 'ROLLBACK' &&
                         params.ENVIRONMENT != 'PRODUCTION') {
+
                         error('Rollback is allowed only for PRODUCTION')
+                    }
+
+                    if (!params.VERSION?.trim()) {
+                        error('VERSION cannot be empty')
                     }
 
                     echo '===================================='
@@ -63,37 +67,42 @@ pipeline {
                     echo "Action      : ${params.ACTION}"
                     echo "Version     : ${params.VERSION}"
                     echo "Run Tests   : ${params.RUN_TESTS}"
+                    echo "Production  : ${params.CONFIRM_PRODUCTION}"
                     echo '===================================='
                 }
             }
         }
+
         stage('Checkout Environment Branch') {
-    steps {
-        script {
+            steps {
+                script {
 
-            def targetBranch = ''
+                    def targetBranch = ''
 
-            if (params.ENVIRONMENT == 'DEV') {
-                targetBranch = 'develop'
-            } else if (params.ENVIRONMENT == 'UAT') {
-                targetBranch = 'release'
-            } else if (params.ENVIRONMENT == 'PRODUCTION') {
-                targetBranch = 'main'
+                    if (params.ENVIRONMENT == 'DEV') {
+                        targetBranch = 'develop'
+                    }
+                    else if (params.ENVIRONMENT == 'UAT') {
+                        targetBranch = 'release'
+                    }
+                    else if (params.ENVIRONMENT == 'PRODUCTION') {
+                        targetBranch = 'main'
+                    }
+
+                    echo "Selected environment : ${params.ENVIRONMENT}"
+                    echo "Selected Git branch  : ${targetBranch}"
+
+                    bat """
+                    git fetch origin
+                    git checkout ${targetBranch}
+                    git reset --hard origin/${targetBranch}
+                    """
+
+                    echo "Successfully checked out branch: ${targetBranch}"
+                }
             }
-
-            echo "Selected environment: ${params.ENVIRONMENT}"
-            echo "Checking out branch: ${targetBranch}"
-
-            bat """
-            git fetch origin
-            git checkout ${targetBranch}
-            git reset --hard origin/${targetBranch}
-            """
-
-            echo "Successfully checked out ${targetBranch}"
         }
-    }
-}
+
         stage('Resolve Environment') {
             steps {
                 script {
@@ -106,7 +115,8 @@ pipeline {
                         env.NETWORK_NAME = 'customer-dev-net'
                         env.DB_VOLUME = 'customer-db-dev-data'
 
-                    } else if (params.ENVIRONMENT == 'UAT') {
+                    }
+                    else if (params.ENVIRONMENT == 'UAT') {
 
                         env.APP_NAME = 'customer-app-uat'
                         env.DB_NAME = 'customer-db-uat'
@@ -114,7 +124,8 @@ pipeline {
                         env.NETWORK_NAME = 'customer-uat-net'
                         env.DB_VOLUME = 'customer-db-uat-data'
 
-                    } else {
+                    }
+                    else {
 
                         env.APP_NAME = 'customer-app-prod'
                         env.DB_NAME = 'customer-db-prod'
@@ -123,17 +134,20 @@ pipeline {
                         env.DB_VOLUME = 'customer-db-prod-data'
                     }
 
+                    echo '===================================='
                     echo "APP       = ${env.APP_NAME}"
                     echo "DB        = ${env.DB_NAME}"
                     echo "PORT      = ${env.HOST_PORT}"
                     echo "NETWORK   = ${env.NETWORK_NAME}"
                     echo "VOLUME    = ${env.DB_VOLUME}"
+                    echo '===================================='
                 }
             }
         }
 
         stage('Prepare Resources') {
             steps {
+
                 bat '''
                 docker network inspect %NETWORK_NAME% >nul 2>&1
                 if errorlevel 1 docker network create %NETWORK_NAME%
@@ -144,7 +158,7 @@ pipeline {
             }
         }
 
-        stage('Capture Previous Version') {
+        stage('Capture Previous Production Version') {
             when {
                 expression {
                     params.ENVIRONMENT == 'PRODUCTION' &&
@@ -163,9 +177,13 @@ pipeline {
                     ).trim()
 
                     if (previous) {
+
                         env.PREVIOUS_VERSION =
                             previous.replace('APP_VERSION=', '').trim()
-                    } else {
+
+                    }
+                    else {
+
                         env.PREVIOUS_VERSION = ''
                     }
 
@@ -186,33 +204,13 @@ pipeline {
 
                     try {
 
-                        withEnv([
-                            "APP_NAME=${env.APP_NAME}",
-                            "DB_NAME=${env.DB_NAME}",
-                            "HOST_PORT=${env.HOST_PORT}",
-                            "NETWORK_NAME=${env.NETWORK_NAME}",
-                            "DB_VOLUME=${env.DB_VOLUME}",
-                            "ENVIRONMENT=${params.ENVIRONMENT}",
-                            "APP_VERSION=${params.VERSION}",
-                            "DB_USER=${env.DB_USER}",
-                            "DB_PASSWORD=${env.DB_PASSWORD}",
-                            "DB_ROOT_PASSWORD=${env.DB_ROOT_PASSWORD}",
-                            "DB_DATABASE=${env.DB_DATABASE}"
+                        withCredentials([
+                            usernamePassword(
+                                credentialsId: 'customer-db-credentials',
+                                usernameVariable: 'DB_USER',
+                                passwordVariable: 'DB_PASSWORD'
+                            )
                         ]) {
-
-                            bat '''
-                            "%COMPOSE%" -p customer-cicd up -d --build --force-recreate
-                            '''
-                        }
-
-                    } catch (err) {
-
-                        echo 'Deployment failed.'
-
-                        if (params.ENVIRONMENT == 'PRODUCTION' &&
-                            env.PREVIOUS_VERSION?.trim()) {
-
-                            echo "Automatically restoring version ${env.PREVIOUS_VERSION}"
 
                             withEnv([
                                 "APP_NAME=${env.APP_NAME}",
@@ -220,18 +218,54 @@ pipeline {
                                 "HOST_PORT=${env.HOST_PORT}",
                                 "NETWORK_NAME=${env.NETWORK_NAME}",
                                 "DB_VOLUME=${env.DB_VOLUME}",
-                                "ENVIRONMENT=PRODUCTION",
-                                "APP_VERSION=${env.PREVIOUS_VERSION}",
-                                "DB_USER=${env.DB_USER}",
-                                "DB_PASSWORD=${env.DB_PASSWORD}",
-                                "DB_ROOT_PASSWORD=${env.DB_ROOT_PASSWORD}",
-                                "DB_DATABASE=${env.DB_DATABASE}"
+                                "ENVIRONMENT=${params.ENVIRONMENT}",
+                                "APP_VERSION=${params.VERSION}",
+                                "DB_DATABASE=${env.DB_DATABASE}",
+                                "DB_ROOT_PASSWORD=root123"
                             ]) {
 
                                 bat '''
                                 "%COMPOSE%" -p customer-cicd up -d --build --force-recreate
                                 '''
+                            }
+                        }
 
+                        echo 'Deployment started successfully.'
+
+                    }
+                    catch (err) {
+
+                        echo 'Deployment command failed.'
+
+                        if (params.ENVIRONMENT == 'PRODUCTION' &&
+                            env.PREVIOUS_VERSION?.trim()) {
+
+                            echo "Automatically restoring version ${env.PREVIOUS_VERSION}"
+
+                            withCredentials([
+                                usernamePassword(
+                                    credentialsId: 'customer-db-credentials',
+                                    usernameVariable: 'DB_USER',
+                                    passwordVariable: 'DB_PASSWORD'
+                                )
+                            ]) {
+
+                                withEnv([
+                                    "APP_NAME=customer-app-prod",
+                                    "DB_NAME=customer-db-prod",
+                                    "HOST_PORT=8083",
+                                    "NETWORK_NAME=customer-prod-net",
+                                    "DB_VOLUME=customer-db-prod-data",
+                                    "ENVIRONMENT=PRODUCTION",
+                                    "APP_VERSION=${env.PREVIOUS_VERSION}",
+                                    "DB_DATABASE=${env.DB_DATABASE}",
+                                    "DB_ROOT_PASSWORD=root123"
+                                ]) {
+
+                                    bat '''
+                                    "%COMPOSE%" -p customer-cicd up -d --build --force-recreate
+                                    '''
+                                }
                             }
 
                             bat 'curl.exe -f http://localhost:8083/health'
@@ -254,26 +288,93 @@ pipeline {
             }
 
             steps {
+                script {
 
-                bat 'docker ps'
+                    try {
 
-                bat 'docker inspect %APP_NAME% --format "{{.State.Status}}"'
+                        echo '===================================='
+                        echo 'Starting deployment validation'
+                        echo '===================================='
 
-                bat 'docker inspect %DB_NAME% --format "{{.State.Status}}"'
+                        bat 'docker image inspect customer-app:%VERSION%'
 
-                bat 'docker network inspect %NETWORK_NAME%'
+                        bat 'docker ps'
 
-                bat 'docker volume inspect %DB_VOLUME%'
+                        bat 'docker inspect %APP_NAME% --format "{{.State.Status}}"'
 
-                bat 'curl.exe -f http://localhost:%HOST_PORT%/health'
+                        bat 'docker inspect %DB_NAME% --format "{{.State.Status}}"'
 
-                bat 'curl.exe -f http://localhost:%HOST_PORT%/db-test'
+                        bat 'docker inspect %APP_NAME% --format "{{json .NetworkSettings.Networks}}"'
 
-                bat 'curl.exe -f http://localhost:%HOST_PORT%/version'
+                        bat 'docker inspect %DB_NAME% --format "{{json .NetworkSettings.Networks}}"'
 
-                echo '===================================='
-                echo 'Deployment validation successful.'
-                echo '===================================='
+                        bat 'docker network inspect %NETWORK_NAME%'
+
+                        bat 'docker volume inspect %DB_VOLUME%'
+
+                        bat 'curl.exe -f http://localhost:%HOST_PORT%/health'
+
+                        bat 'curl.exe -f http://localhost:%HOST_PORT%/db-test'
+
+                        bat 'curl.exe -f http://localhost:%HOST_PORT%/environment'
+
+                        bat 'curl.exe -f http://localhost:%HOST_PORT%/version'
+
+                        echo '===================================='
+                        echo 'Deployment validation successful.'
+                        echo '===================================='
+
+                    }
+                    catch (err) {
+
+                        echo '===================================='
+                        echo 'DEPLOYMENT VALIDATION FAILED'
+                        echo '===================================='
+
+                        if (params.ENVIRONMENT == 'PRODUCTION' &&
+                            env.PREVIOUS_VERSION?.trim()) {
+
+                            echo "Restoring previous production version: ${env.PREVIOUS_VERSION}"
+
+                            withCredentials([
+                                usernamePassword(
+                                    credentialsId: 'customer-db-credentials',
+                                    usernameVariable: 'DB_USER',
+                                    passwordVariable: 'DB_PASSWORD'
+                                )
+                            ]) {
+
+                                withEnv([
+                                    "APP_NAME=customer-app-prod",
+                                    "DB_NAME=customer-db-prod",
+                                    "HOST_PORT=8083",
+                                    "NETWORK_NAME=customer-prod-net",
+                                    "DB_VOLUME=customer-db-prod-data",
+                                    "ENVIRONMENT=PRODUCTION",
+                                    "APP_VERSION=${env.PREVIOUS_VERSION}",
+                                    "DB_DATABASE=${env.DB_DATABASE}",
+                                    "DB_ROOT_PASSWORD=root123"
+                                ]) {
+
+                                    bat '''
+                                    "%COMPOSE%" -p customer-cicd up -d --build --force-recreate
+                                    '''
+                                }
+                            }
+
+                            bat 'curl.exe -f http://localhost:8083/health'
+
+                            bat 'curl.exe -f http://localhost:8083/version'
+
+                            echo '===================================='
+                            echo "Rollback restored version ${env.PREVIOUS_VERSION}"
+                            echo 'Production application is healthy again.'
+                            echo '===================================='
+                        }
+
+                        throw err
+                    }
+                }
             }
         }
 
@@ -287,34 +388,41 @@ pipeline {
             steps {
                 script {
 
-                    if (!env.PREVIOUS_VERSION?.trim()) {
-                        error('No previous production version found for rollback.')
-                    }
+                    echo "Rolling back production to version: ${params.VERSION}"
 
-                    echo "Restoring production version: ${env.PREVIOUS_VERSION}"
-
-                    withEnv([
-                        "APP_NAME=customer-app-prod",
-                        "DB_NAME=customer-db-prod",
-                        "HOST_PORT=8083",
-                        "NETWORK_NAME=customer-prod-net",
-                        "DB_VOLUME=customer-db-prod-data",
-                        "ENVIRONMENT=PRODUCTION",
-                        "APP_VERSION=${env.PREVIOUS_VERSION}",
-                        "DB_USER=${env.DB_USER}",
-                        "DB_PASSWORD=${env.DB_PASSWORD}",
-                        "DB_ROOT_PASSWORD=${env.DB_ROOT_PASSWORD}",
-                        "DB_DATABASE=${env.DB_DATABASE}"
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'customer-db-credentials',
+                            usernameVariable: 'DB_USER',
+                            passwordVariable: 'DB_PASSWORD'
+                        )
                     ]) {
 
-                        bat '''
-                        "%COMPOSE%" -p customer-cicd up -d --build --force-recreate
-                        '''
+                        withEnv([
+                            "APP_NAME=customer-app-prod",
+                            "DB_NAME=customer-db-prod",
+                            "HOST_PORT=8083",
+                            "NETWORK_NAME=customer-prod-net",
+                            "DB_VOLUME=customer-db-prod-data",
+                            "ENVIRONMENT=PRODUCTION",
+                            "APP_VERSION=${params.VERSION}",
+                            "DB_DATABASE=${env.DB_DATABASE}",
+                            "DB_ROOT_PASSWORD=root123"
+                        ]) {
+
+                            bat '''
+                            "%COMPOSE%" -p customer-cicd up -d --build --force-recreate
+                            '''
+                        }
                     }
 
                     bat 'curl.exe -f http://localhost:8083/health'
 
-                    echo 'Production rollback completed.'
+                    bat 'curl.exe -f http://localhost:8083/version'
+
+                    echo '===================================='
+                    echo "Production rollback to ${params.VERSION} completed."
+                    echo '===================================='
                 }
             }
         }
