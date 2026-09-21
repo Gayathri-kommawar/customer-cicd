@@ -80,7 +80,8 @@ def search_customers():
 
     if not query:
         return jsonify({"error": "Search query is required"}), 400
-
+    if len(query) < 2:
+        return jsonify({"error": "Search query must contain at least 2 characters"}), 400
     try:
         connection = mysql.connector.connect(
             host=DB_HOST,
