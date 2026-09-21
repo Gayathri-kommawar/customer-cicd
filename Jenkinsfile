@@ -67,7 +67,33 @@ pipeline {
                 }
             }
         }
+        stage('Checkout Environment Branch') {
+    steps {
+        script {
 
+            def targetBranch = ''
+
+            if (params.ENVIRONMENT == 'DEV') {
+                targetBranch = 'develop'
+            } else if (params.ENVIRONMENT == 'UAT') {
+                targetBranch = 'release'
+            } else if (params.ENVIRONMENT == 'PRODUCTION') {
+                targetBranch = 'main'
+            }
+
+            echo "Selected environment: ${params.ENVIRONMENT}"
+            echo "Checking out branch: ${targetBranch}"
+
+            bat """
+            git fetch origin
+            git checkout ${targetBranch}
+            git reset --hard origin/${targetBranch}
+            """
+
+            echo "Successfully checked out ${targetBranch}"
+        }
+    }
+}
         stage('Resolve Environment') {
             steps {
                 script {
