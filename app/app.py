@@ -104,6 +104,7 @@ def search_customers():
 
         return jsonify({
             "query": query,
+            "count": len(customers),
             "customers": customers
         })
 
