@@ -116,7 +116,7 @@ pipeline {
                         "ENVIRONMENT=${params.ENVIRONMENT}",
                         "APP_VERSION=${params.VERSION}"
                     ]) {
-                        bat 'docker compose up -d --build --force-recreate'
+                        bat '"C:\\Users\\gayat\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker-compose.exe" up -d --build --force-recreate'
                     }
                 }
             }
