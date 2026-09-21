@@ -38,6 +38,8 @@ pipeline {
         DB_PASSWORD = 'customer123'
         DB_ROOT_PASSWORD = 'root123'
         DB_DATABASE = 'customerdb'
+
+        COMPOSE = 'C:\\Users\\gayat\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker-compose.exe'
     }
 
     stages {
@@ -50,7 +52,8 @@ pipeline {
                         error('Production deployment requires CONFIRM_PRODUCTION=YES')
                     }
 
-                    if (params.ACTION == 'ROLLBACK' && params.ENVIRONMENT != 'PRODUCTION') {
+                    if (params.ACTION == 'ROLLBACK' &&
+                        params.ENVIRONMENT != 'PRODUCTION') {
                         error('Rollback is allowed only for PRODUCTION')
                     }
 
@@ -98,6 +101,46 @@ pipeline {
             }
         }
 
+        stage('Prepare Resources') {
+            steps {
+                bat '''
+                docker network inspect %NETWORK_NAME% >nul 2>&1
+                if errorlevel 1 docker network create %NETWORK_NAME%
+
+                docker volume inspect %DB_VOLUME% >nul 2>&1
+                if errorlevel 1 docker volume create %DB_VOLUME%
+                '''
+            }
+        }
+
+        stage('Capture Previous Version') {
+            when {
+                expression {
+                    params.ENVIRONMENT == 'PRODUCTION' &&
+                    params.ACTION == 'DEPLOY'
+                }
+            }
+
+            steps {
+                script {
+                    def result = bat(
+                        returnStdout: true,
+                        script: '''
+                        docker inspect customer-app-prod --format "{{range .Config.Env}}{{println .}}{{end}}" 2>nul | findstr /B "APP_VERSION="
+                        '''
+                    ).trim()
+
+                    if (result) {
+                        env.PREVIOUS_VERSION = result.replace('APP_VERSION=', '').trim()
+                    } else {
+                        env.PREVIOUS_VERSION = ''
+                    }
+
+                    echo "Previous production version: ${env.PREVIOUS_VERSION}"
+                }
+            }
+        }
+
         stage('Deploy') {
             when {
                 expression {
@@ -107,16 +150,53 @@ pipeline {
 
             steps {
                 script {
-                    withEnv([
-                        "APP_NAME=${env.APP_NAME}",
-                        "DB_NAME=${env.DB_NAME}",
-                        "HOST_PORT=${env.HOST_PORT}",
-                        "NETWORK_NAME=${env.NETWORK_NAME}",
-                        "DB_VOLUME=${env.DB_VOLUME}",
-                        "ENVIRONMENT=${params.ENVIRONMENT}",
-                        "APP_VERSION=${params.VERSION}"
-                    ]) {
-                        bat '"C:\\Users\\gayat\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker-compose.exe" up -d --build --force-recreate'
+                    try {
+                        withEnv([
+                            "APP_NAME=${env.APP_NAME}",
+                            "DB_NAME=${env.DB_NAME}",
+                            "HOST_PORT=${env.HOST_PORT}",
+                            "NETWORK_NAME=${env.NETWORK_NAME}",
+                            "DB_VOLUME=${env.DB_VOLUME}",
+                            "ENVIRONMENT=${params.ENVIRONMENT}",
+                            "APP_VERSION=${params.VERSION}",
+                            "DB_USER=${env.DB_USER}",
+                            "DB_PASSWORD=${env.DB_PASSWORD}",
+                            "DB_ROOT_PASSWORD=${env.DB_ROOT_PASSWORD}",
+                            "DB_DATABASE=${env.DB_DATABASE}"
+                        ]) {
+                            bat '"%COMPOSE%" -p customer-%ENVIRONMENT% up -d --build --force-recreate'
+                        }
+                    }
+                    catch (err) {
+                        echo "Deployment failed."
+
+                        if (params.ENVIRONMENT == 'PRODUCTION' &&
+                            env.PREVIOUS_VERSION?.trim()) {
+
+                            echo "Automatically restoring production version ${env.PREVIOUS_VERSION}"
+
+                            withEnv([
+                                "APP_NAME=${env.APP_NAME}",
+                                "DB_NAME=${env.DB_NAME}",
+                                "HOST_PORT=${env.HOST_PORT}",
+                                "NETWORK_NAME=${env.NETWORK_NAME}",
+                                "DB_VOLUME=${env.DB_VOLUME}",
+                                "ENVIRONMENT=${params.ENVIRONMENT}",
+                                "APP_VERSION=${env.PREVIOUS_VERSION}",
+                                "DB_USER=${env.DB_USER}",
+                                "DB_PASSWORD=${env.DB_PASSWORD}",
+                                "DB_ROOT_PASSWORD=${env.DB_ROOT_PASSWORD}",
+                                "DB_DATABASE=${env.DB_DATABASE}"
+                            ]) {
+                                bat '"%COMPOSE%" -p customer-PRODUCTION up -d --build --force-recreate'
+                            }
+
+                            bat 'curl.exe -f http://localhost:8083/health'
+
+                            echo "Production rollback completed successfully."
+                        }
+
+                        throw err
                     }
                 }
             }
@@ -125,30 +205,29 @@ pipeline {
         stage('Validate Deployment') {
             when {
                 expression {
-                    params.RUN_TESTS == 'YES' && params.ACTION == 'DEPLOY'
+                    params.RUN_TESTS == 'YES' &&
+                    params.ACTION == 'DEPLOY'
                 }
             }
 
             steps {
-                script {
-                    bat 'docker ps'
+                bat 'docker ps'
 
-                    bat 'docker inspect %APP_NAME% --format "{{.State.Status}}"'
+                bat 'docker inspect %APP_NAME% --format "{{.State.Status}}"'
 
-                    bat 'docker inspect %DB_NAME% --format "{{.State.Status}}"'
+                bat 'docker inspect %DB_NAME% --format "{{.State.Status}}"'
 
-                    bat 'docker network inspect %NETWORK_NAME%'
+                bat 'docker network inspect %NETWORK_NAME%'
 
-                    bat 'docker volume inspect %DB_VOLUME%'
+                bat 'docker volume inspect %DB_VOLUME%'
 
-                    bat 'curl.exe -f http://localhost:%HOST_PORT%/health'
+                bat 'curl.exe -f http://localhost:%HOST_PORT%/health'
 
-                    bat 'curl.exe -f http://localhost:%HOST_PORT%/db-test'
+                bat 'curl.exe -f http://localhost:%HOST_PORT%/db-test'
 
-                    bat 'curl.exe -f http://localhost:%HOST_PORT%/version'
+                bat 'curl.exe -f http://localhost:%HOST_PORT%/version'
 
-                    echo "Deployment validation completed successfully."
-                }
+                echo "Deployment validation completed successfully."
             }
         }
 
@@ -160,8 +239,33 @@ pipeline {
             }
 
             steps {
-                echo "Rollback requested for PRODUCTION."
-                echo "Rollback implementation will restore the previously deployed version."
+                script {
+                    if (!env.PREVIOUS_VERSION?.trim()) {
+                        error('No previous production version was found for rollback.')
+                    }
+
+                    echo "Restoring production version: ${env.PREVIOUS_VERSION}"
+
+                    withEnv([
+                        "APP_NAME=customer-app-prod",
+                        "DB_NAME=customer-db-prod",
+                        "HOST_PORT=8083",
+                        "NETWORK_NAME=customer-prod-net",
+                        "DB_VOLUME=customer-db-prod-data",
+                        "ENVIRONMENT=PRODUCTION",
+                        "APP_VERSION=${env.PREVIOUS_VERSION}",
+                        "DB_USER=${env.DB_USER}",
+                        "DB_PASSWORD=${env.DB_PASSWORD}",
+                        "DB_ROOT_PASSWORD=${env.DB_ROOT_PASSWORD}",
+                        "DB_DATABASE=${env.DB_DATABASE}"
+                    ]) {
+                        bat '"%COMPOSE%" -p customer-PRODUCTION up -d --build --force-recreate'
+                    }
+
+                    bat 'curl.exe -f http://localhost:8083/health'
+
+                    echo "Production rollback completed."
+                }
             }
         }
     }
@@ -172,7 +276,7 @@ pipeline {
         }
 
         failure {
-            echo "Jenkins pipeline failed. Deployment must not be considered successful."
+            echo "Jenkins pipeline failed."
         }
     }
 }
