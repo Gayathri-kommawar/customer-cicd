@@ -1,41 +1,43 @@
 services:
 
-  customer-app-dev:
+  customer-app:
     build:
       context: ./app
-    container_name: customer-app-dev
+    image: customer-app:${APP_VERSION:-5.0}
+    container_name: ${APP_NAME:-customer-app-dev}
     ports:
-      - "8081:5000"
+      - "${HOST_PORT:-8081}:5000"
     environment:
-      APP_VERSION: "1.0"
-      ENVIRONMENT: "DEV"
-      DB_HOST: "customer-db-dev"
-      DB_USER: "customer"
-      DB_PASSWORD: "customer123"
-      DB_NAME: "customerdb"
+      APP_VERSION: "${APP_VERSION:-5.0}"
+      ENVIRONMENT: "${ENVIRONMENT:-DEV}"
+      DB_HOST: "${DB_NAME:-customer-db-dev}"
+      DB_USER: "${DB_USER:-customer}"
+      DB_PASSWORD: "${DB_PASSWORD:-customer123}"
+      DB_NAME: "${DB_DATABASE:-customerdb}"
     depends_on:
-      - customer-db-dev
+      - customer-db
     networks:
-      - customer-dev-net
+      - customer-network
 
-  customer-db-dev:
+  customer-db:
     image: mysql:8.0
-    container_name: customer-db-dev
+    container_name: ${DB_NAME:-customer-db-dev}
     environment:
-      MYSQL_ROOT_PASSWORD: "root123"
-      MYSQL_DATABASE: "customerdb"
-      MYSQL_USER: "customer"
-      MYSQL_PASSWORD: "customer123"
+      MYSQL_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-root123}"
+      MYSQL_DATABASE: "${DB_DATABASE:-customerdb}"
+      MYSQL_USER: "${DB_USER:-customer}"
+      MYSQL_PASSWORD: "${DB_PASSWORD:-customer123}"
     volumes:
-      - customer-db-dev-data:/var/lib/mysql
+      - ${DB_VOLUME:-customer-db-dev-data}:/var/lib/mysql
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
-      - customer-dev-net
+      - customer-network
 
 networks:
-  customer-dev-net:
-    name: customer-dev-net
+
+  customer-network:
+    name: ${NETWORK_NAME:-customer-dev-net}
 
 volumes:
   customer-db-dev-data:
-    name: customer-db-dev-data
+    name: ${DB_VOLUME:-customer-db-dev-data}
