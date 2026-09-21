@@ -1,0 +1,41 @@
+services:
+
+  customer-app-dev:
+    build:
+      context: ./app
+    container_name: customer-app-dev
+    ports:
+      - "8081:5000"
+    environment:
+      APP_VERSION: "1.0"
+      ENVIRONMENT: "DEV"
+      DB_HOST: "customer-db-dev"
+      DB_USER: "customer"
+      DB_PASSWORD: "customer123"
+      DB_NAME: "customerdb"
+    depends_on:
+      - customer-db-dev
+    networks:
+      - customer-dev-net
+
+  customer-db-dev:
+    image: mysql:8.0
+    container_name: customer-db-dev
+    environment:
+      MYSQL_ROOT_PASSWORD: "root123"
+      MYSQL_DATABASE: "customerdb"
+      MYSQL_USER: "customer"
+      MYSQL_PASSWORD: "customer123"
+    volumes:
+      - customer-db-dev-data:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - customer-dev-net
+
+networks:
+  customer-dev-net:
+    name: customer-dev-net
+
+volumes:
+  customer-db-dev-data:
+    name: customer-db-dev-data
